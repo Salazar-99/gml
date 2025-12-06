@@ -1,0 +1,21 @@
+pub mod error;
+
+use error::GmlError;
+
+pub trait NodeProvider {
+    fn start_node(&self, request: NodeRequest) -> Result<NodeDetails, GmlError>;
+    fn stop_node(&self, details: NodeDetails) -> Result<NodeDetails, GmlError>;
+}
+
+pub struct NodeDetails {
+    pub ip: String,
+    pub id: String
+}
+
+pub struct NodeRequest {
+    pub instance_type: String,
+    pub ssh_key_id: String
+}
+
+pub trait ClusterProvider {}
+

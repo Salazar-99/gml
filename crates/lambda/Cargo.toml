@@ -1,0 +1,8 @@
+[package]
+name = "gml-lambda"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gml-core = { path = "../core" }
+

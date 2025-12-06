@@ -1,0 +1,16 @@
+[package]
+name = "gml-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "gml"
+path = "src/main.rs"
+
+[dependencies]
+gml-core = { path = "../core" }
+gml-lambda = { path = "../lambda" }
+clap = { version = "4.5.51", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
+toml = "0.9.8"
+
