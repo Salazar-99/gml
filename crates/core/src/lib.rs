@@ -13,8 +13,7 @@ pub struct NodeDetails {
 }
 
 pub struct NodeRequest {
-    pub instance_type: String,
-    pub ssh_key_id: String
+    pub instance_type: String
 }
 
 pub trait ClusterProvider {}

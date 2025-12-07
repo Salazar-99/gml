@@ -12,5 +12,9 @@ gml-core = { path = "../core" }
 gml-lambda = { path = "../lambda" }
 clap = { version = "4.5.51", features = ["derive"] }
 serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0"
 toml = "0.9.8"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5.0"
+comfy-table = "7.1"
 
