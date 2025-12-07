@@ -14,7 +14,7 @@ pub struct Config {
 pub struct ProviderConfig {
     #[serde(rename = "api-key")]
     pub api_key: Option<String>,
-    #[serde(rename = "ssh-key")]
+    #[serde(rename = "ssh-key-name")]
     pub ssh_key: Option<String>,
     #[serde(rename = "region")]
     pub region: Option<String>,

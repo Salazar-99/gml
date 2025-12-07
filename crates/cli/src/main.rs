@@ -127,8 +127,8 @@ fn handle_create_node(provider: String, instance_type: String, _timeout: String)
 
     let details = provider_handle.start_node(request)
         .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
-
-    GmlState::add_node(details, provider, instance_type)
+    
+    GmlState::add_node(details, provider.clone(), instance_type.clone())
         .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
 
     // TODO: Add timeout logic
