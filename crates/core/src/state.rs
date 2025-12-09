@@ -1,5 +1,5 @@
-use gml_core::NodeDetails;
-use gml_core::error::GmlError;
+use crate::NodeDetails;
+use crate::error::GmlError;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -15,10 +15,12 @@ pub struct GmlState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeEntry {
     pub id: String,
+    pub provider_id: String,
     pub ip: String,
     pub provider: String,
     pub created_at: String,
     pub instance_type: String,
+    pub timeout: Option<String>, // RFC3339 timestamp in UTC
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,20 +92,26 @@ impl GmlState {
         node_details: NodeDetails,
         provider: String,
         instance_type: String,
+        timeout: Option<String>, // RFC3339 timestamp in UTC
     ) -> Result<(), GmlError> {
         let mut state = Self::load()?;
         
+        // Generate a unique ID for the state
+        let unique_id = uuid::Uuid::new_v4().to_string();
+        
         let entry = NodeEntry {
-            id: node_details.id.clone(),
+            id: unique_id,
+            provider_id: node_details.id.clone(),
             ip: node_details.ip,
             provider,
             created_at: chrono::Utc::now().to_rfc3339(),
             instance_type,
+            timeout,
         };
 
-        // Check if node already exists
-        if state.nodes.iter().any(|n| n.id == entry.id) {
-            return Err(GmlError::from(format!("Node with id '{}' already exists", entry.id)));
+        // Check if node already exists (by provider_id to avoid duplicates from same provider)
+        if state.nodes.iter().any(|n| n.provider_id == entry.provider_id && n.provider == entry.provider) {
+            return Err(GmlError::from(format!("Node with provider_id '{}' from provider '{}' already exists", entry.provider_id, entry.provider)));
         }
 
         state.nodes.push(entry);
@@ -133,6 +141,19 @@ impl GmlState {
     pub fn list_nodes() -> Result<Vec<NodeEntry>, GmlError> {
         let state = Self::load()?;
         Ok(state.nodes)
+    }
+
+    /// Update the timeout for a node
+    pub fn update_node_timeout(node_id: &str, timeout: Option<String>) -> Result<(), GmlError> {
+        let mut state = Self::load()?;
+        
+        // Find the node and update its timeout
+        let node = state.nodes.iter_mut()
+            .find(|n| n.id == node_id)
+            .ok_or_else(|| GmlError::from(format!("Node with id '{}' not found", node_id)))?;
+        
+        node.timeout = timeout;
+        state.save()
     }
 
     /// Add a cluster entry to the state
@@ -198,3 +219,4 @@ fn expand_path(path: &str) -> Result<PathBuf, GmlError> {
         Ok(PathBuf::from(path))
     }
 }
+
