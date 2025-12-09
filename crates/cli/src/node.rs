@@ -103,6 +103,14 @@ pub fn handle_delete_node(id: String) -> Result<(), Box<dyn std::error::Error>> 
 
 pub fn handle_connect_command(_id: String) {
     // TODO: Implement connect logic
+    // scp current working dir to remote machine
+    // check if in a git directory, if so
+    // get user for provider
+    // copy ssh public key to remote machine
+    // Configure remote machine to use git ssh
+    // Run cursor --folder-uri vscode-remote://ssh-remote+<hostname>/<folder_path> to connect
+    // Make sure to update spinner
+
 }
 
 pub fn handle_node_timeout_reset(id: String, duration: String) -> Result<(), Box<dyn std::error::Error>> {

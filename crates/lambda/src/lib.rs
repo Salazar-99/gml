@@ -138,6 +138,11 @@ impl NodeProvider for Lambda {
             id: instance.id.clone(),
         })
     }
+
+    /// Hardcoded Ubuntu user, works for default Lambda Stack image
+    fn get_user(&self) -> Result<String, GmlError> {
+        Ok("ubuntu".to_string())
+    }
 }
 
 impl Lambda {
