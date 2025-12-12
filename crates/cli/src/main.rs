@@ -5,6 +5,8 @@ mod providers;
 mod node;
 mod cluster;
 mod ls;
+mod spinner;
+mod sh;
 
 
 #[derive(Parser, Debug)]
@@ -154,7 +156,10 @@ fn main() {
             ls::handle_ls_command();
         }
         Commands::Connect { id } => {
-            node::handle_connect_command(id);
+            if let Err(e) = node::handle_connect_command(id) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
     }
 }

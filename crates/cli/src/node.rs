@@ -1,30 +1,26 @@
 use chrono::Utc;
 use gml_core::{NodeRequest, NodeDetails};
 use gml_core::state::GmlState;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::env;
 use std::time::Duration;
+use std::path::Path;
+use std::fs;
 use sysinfo::System;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::ProgressBar;
 use humantime::parse_duration;
+use dirs;
 
 use crate::config;
 use crate::providers;
+use crate::spinner;
+use crate::sh;
 
 pub fn handle_create_node(provider: String, instance_type: String, timeout: String) -> Result<(), Box<dyn std::error::Error>> {
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
-            .template("{spinner:.green} {msg}")
-            .unwrap()
-    );
-    spinner.enable_steady_tick(Duration::from_millis(100));
+    let spinner = spinner::create_spinner();
 
-    spinner.set_message("Checking daemon status...");
     ensure_daemon_running(&spinner)?;
 
-    spinner.set_message("Parsing configuration...");
     // Parse config from ~/.gml/config.toml
     let config = config::parse_config()?;
 
@@ -44,6 +40,9 @@ pub fn handle_create_node(provider: String, instance_type: String, timeout: Stri
     let details = provider_handle.start_node(request)
         .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
     
+    let user = provider_handle.get_user()
+        .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
+    
     // Parse timeout duration and calculate expiration time
     let timeout_expiration = parse_timeout_duration(&timeout)
         .map(|duration| {
@@ -51,8 +50,7 @@ pub fn handle_create_node(provider: String, instance_type: String, timeout: Stri
             expiration.to_rfc3339()
         });
     
-    spinner.set_message("Updating state...");
-    GmlState::add_node(details, provider.clone(), instance_type.clone(), timeout_expiration)
+    GmlState::add_node(details, provider.clone(), instance_type.clone(), timeout_expiration, user)
         .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
 
     spinner.finish_with_message("Node created successfully!");
@@ -60,14 +58,7 @@ pub fn handle_create_node(provider: String, instance_type: String, timeout: Stri
 }
 
 pub fn handle_delete_node(id: String) -> Result<(), Box<dyn std::error::Error>> {
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
-            .template("{spinner:.green} {msg}")
-            .unwrap()
-    );
-    spinner.enable_steady_tick(Duration::from_millis(100));
+    let spinner = spinner::create_spinner();
 
     spinner.set_message("Locating node...");
     
@@ -101,27 +92,125 @@ pub fn handle_delete_node(id: String) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
-pub fn handle_connect_command(_id: String) {
-    // TODO: Implement connect logic
-    // scp current working dir to remote machine
-    // check if in a git directory, if so
-    // get user for provider
-    // copy ssh public key to remote machine
-    // Configure remote machine to use git ssh
-    // Run cursor --folder-uri vscode-remote://ssh-remote+<hostname>/<folder_path> to connect
-    // Make sure to update spinner
+pub fn handle_connect_command(id: String) -> Result<(), Box<dyn std::error::Error>> {
+    let spinner = spinner::create_spinner();
 
+    spinner.set_message("Locating node...");
+    
+    // Get node data from state with id
+    let node = match GmlState::get_node(&id)? {
+        Some(n) => n,
+        None => return Err(format!("Node with ID '{}' not found", id).into()),
+    };
+
+    spinner.set_message("Getting current working directory...");
+    let current_dir = env::current_dir()?;
+    let dir_name = current_dir.file_name()
+        .ok_or("Failed to get directory name")?
+        .to_str()
+        .ok_or("Directory name contains invalid UTF-8")?;
+
+    // Check if in a git directory
+    let is_git_dir = current_dir.join(".git").exists();
+
+    spinner.set_message(format!("Copying directory to {}@{}...", node.user, node.ip));
+    
+    // Create remote directory first
+    let remote_dir = format!("/home/{}/{}", node.user, dir_name);
+    let ssh_cmd = format!("ssh -o StrictHostKeyChecking=no {}@{}", node.user, node.ip);
+    let mkdir_cmd = format!("mkdir -p {}", remote_dir);
+    
+    sh::run(&format!("{} '{}'", ssh_cmd, mkdir_cmd))
+        .map_err(|e| format!("Failed to create remote directory: {}", e))?;
+
+    // Build rsync exclude patterns from .gitignore
+    let mut exclude_patterns = vec!["--exclude".to_string(), ".git".to_string()];
+    if let Ok(patterns) = read_gitignore_patterns(&current_dir) {
+        for pattern in patterns {
+            exclude_patterns.push("--exclude".to_string());
+            exclude_patterns.push(pattern);
+        }
+    }
+
+    // Copy FROM local TO remote
+    let exclude_args = exclude_patterns.join(" ");
+    let rsync_cmd = format!(
+        "rsync -avz --quiet {} {}/ {}@{}:{}/",
+        exclude_args, current_dir.display(), node.user, node.ip, remote_dir
+    );
+
+    sh::run(&rsync_cmd)
+        .map_err(|_| -> Box<dyn std::error::Error> { "Failed to copy directory to remote machine".into() })?;
+
+    // If in a git directory, copy .git directory and configure git ssh
+    if is_git_dir {
+        spinner.set_message("Copying .git directory...");
+        
+        // Copy .git directory separately
+        let git_rsync_cmd = format!(
+            "rsync -avz --quiet {}/.git {}@{}:{}/.git",
+            current_dir.display(), node.user, node.ip, remote_dir
+        );
+
+        sh::run(&git_rsync_cmd)
+            .map_err(|e| format!("Failed to copy .git directory: {}", e))?;
+
+        spinner.set_message("Configuring Git SSH...");
+        
+        // Find SSH public key (try common locations)
+        let home_dir = dirs::home_dir()
+            .ok_or("Unable to determine home directory")?;
+        let ssh_key_paths = vec![
+            home_dir.join(".ssh/id_rsa.pub"),
+            home_dir.join(".ssh/id_ed25519.pub"),
+            home_dir.join(".ssh/id_ecdsa.pub"),
+        ];
+
+        let mut ssh_key_path = None;
+        for path in &ssh_key_paths {
+            if path.exists() {
+                ssh_key_path = Some(path.clone());
+                break;
+            }
+        }
+
+        if let Some(key_path) = ssh_key_path {
+            // Copy SSH public key to remote machine's authorized_keys
+            let copy_key_cmd = format!(
+                "cat {} | {} 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && chmod 700 ~/.ssh'",
+                key_path.display(), ssh_cmd
+            );
+
+            sh::run(&copy_key_cmd)
+                .map_err(|e| format!("Failed to copy SSH key: {}", e))?;
+
+            // Configure git to use SSH
+            let git_config_cmd = format!(
+                "{} 'cd {} && git config --global url.\"git@github.com:\".insteadOf \"https://github.com/\" || true'",
+                ssh_cmd, remote_dir
+            );
+
+            sh::run(&git_config_cmd)
+                .map_err(|e| format!("Failed to configure git SSH: {}", e))?;
+        }
+    }
+
+    spinner.set_message("Connecting with Cursor...");
+    
+    // Run cursor --folder-uri vscode-remote://ssh-remote+<user>@<hostname>/<folder_path>
+    let folder_uri = format!("vscode-remote://ssh-remote+{}@{}/{}", node.user, node.ip, remote_dir);
+    let cursor_cmd = format!("cursor --folder-uri {}", folder_uri);
+
+    spinner.finish_with_message("Opening Cursor...");
+    
+    sh::spawn(&cursor_cmd)
+        .map_err(|e| format!("Failed to launch Cursor: {}. Make sure Cursor is installed and in your PATH.", e))?;
+
+    Ok(())
 }
 
 pub fn handle_node_timeout_reset(id: String, duration: String) -> Result<(), Box<dyn std::error::Error>> {
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
-            .template("{spinner:.green} {msg}")
-            .unwrap()
-    );
-    spinner.enable_steady_tick(Duration::from_millis(100));
+    let spinner = spinner::create_spinner();
 
     spinner.set_message("Locating node...");
     
@@ -149,14 +238,7 @@ pub fn handle_node_timeout_reset(id: String, duration: String) -> Result<(), Box
 }
 
 pub fn handle_node_timeout_remove(id: String) -> Result<(), Box<dyn std::error::Error>> {
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
-            .template("{spinner:.green} {msg}")
-            .unwrap()
-    );
-    spinner.enable_steady_tick(Duration::from_millis(100));
+    let spinner = spinner::create_spinner();
 
     spinner.set_message("Locating node...");
     
@@ -174,7 +256,7 @@ pub fn handle_node_timeout_remove(id: String) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
-fn ensure_daemon_running(spinner: &ProgressBar) -> Result<(), Box<dyn std::error::Error>> {
+fn ensure_daemon_running(_spinner: &ProgressBar) -> Result<(), Box<dyn std::error::Error>> {
     let mut system = System::new_all();
     system.refresh_all();
     
@@ -184,8 +266,6 @@ fn ensure_daemon_running(spinner: &ProgressBar) -> Result<(), Box<dyn std::error
     });
 
     if !daemon_running {
-        spinner.set_message("Daemon not running, starting gmld...");
-        
         let current_exe = env::current_exe()?;
         let daemon_path = current_exe.parent()
             .ok_or("Failed to get parent directory")?
@@ -195,15 +275,15 @@ fn ensure_daemon_running(spinner: &ProgressBar) -> Result<(), Box<dyn std::error
              return Err(format!("Daemon executable not found at {:?}", daemon_path).into());
         }
 
+        // Suppress daemon output to avoid interfering with spinner
         Command::new(daemon_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("Failed to start daemon: {}", e))?;
             
         // Give it a moment to start
         std::thread::sleep(Duration::from_secs(1));
-        spinner.set_message("Daemon started.");
-    } else {
-        spinner.set_message("Daemon is already running.");
     }
     
     Ok(())
@@ -215,5 +295,32 @@ fn parse_timeout_duration(timeout_str: &str) -> Option<chrono::Duration> {
     parse_duration(timeout_str)
         .ok()
         .and_then(|std_duration| chrono::Duration::from_std(std_duration).ok())
+}
+
+/// Read and parse .gitignore file, returning a vector of patterns
+/// Skips comments (lines starting with #) and empty lines
+fn read_gitignore_patterns(dir: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let gitignore_path = dir.join(".gitignore");
+    
+    if !gitignore_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(&gitignore_path)?;
+    let mut patterns = Vec::new();
+
+    for line in content.lines() {
+        let line = line.trim();
+        
+        // Skip empty lines and comments
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        // Add the pattern as-is (rsync will handle it)
+        patterns.push(line.to_string());
+    }
+
+    Ok(patterns)
 }
 

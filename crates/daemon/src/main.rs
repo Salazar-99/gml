@@ -4,22 +4,61 @@ use chrono::{DateTime, Utc};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
+use std::fs::{OpenOptions, create_dir_all, File};
+use std::io::Write;
+use dirs;
+
+fn open_log_file() -> Result<File, Box<dyn std::error::Error>> {
+    let home_dir = dirs::home_dir()
+        .ok_or("Unable to determine home directory")?;
+    let log_dir = home_dir.join(".gml");
+    let log_file = log_dir.join("gmld.log");
+    
+    // Create .gml directory if it doesn't exist
+    create_dir_all(&log_dir)?;
+    
+    // Open log file for appending (create if it doesn't exist)
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file)?;
+    
+    Ok(file)
+}
+
+fn log<W: Write>(out: &mut W, message: &str) {
+    let _ = writeln!(out, "{}", message);
+    let _ = out.flush();
+}
+
+fn log_error<W: Write>(out: &mut W, message: &str) {
+    log(out, &format!("ERROR: {}", message));
+}
 
 fn main() {
-    println!("GML Daemon starting...");
+    // Initialize logging to ~/.gml/gmld.log
+    let mut log_file = match open_log_file() {
+        Ok(f) => f,
+        Err(e) => {
+        eprintln!("Failed to initialize log file: {}", e);
+        return;
+        }
+    };
+    
+    log(&mut log_file, "GML Daemon starting...");
     
     loop {
         match GmlState::load() {
             Ok(state) => {
-                println!("Read state: {} nodes, {} clusters", 
+                log(&mut log_file, &format!("Read state: {} nodes, {} clusters", 
                     state.nodes.len(), 
-                    state.clusters.len());
+                    state.clusters.len()));
                 
                 // Process node timeouts
                 for node_entry in &state.nodes {
                     if let Some(ref timeout) = node_entry.timeout {
-                        if let Err(e) = handle_node_timeout(node_entry, timeout) {
-                            eprintln!("Error handling node timeout {}: {}", node_entry.id, e);
+                        if let Err(e) = handle_node_timeout(&mut log_file, node_entry, timeout) {
+                            log_error(&mut log_file, &format!("Error handling node timeout {}: {}", node_entry.id, e));
                         }
                     }
                 }
@@ -27,14 +66,14 @@ fn main() {
                 // Process cluster timeouts
                 for cluster_entry in &state.clusters {
                     if let Some(ref timeout) = cluster_entry.timeout {
-                        if let Err(e) = handle_cluster_timeout(cluster_entry, timeout) {
-                            eprintln!("Error handling cluster timeout {}: {}", cluster_entry.id, e);
+                        if let Err(e) = handle_cluster_timeout(&mut log_file, cluster_entry, timeout) {
+                            log_error(&mut log_file, &format!("Error handling cluster timeout {}: {}", cluster_entry.id, e));
                         }
                     }
                 }
             }
             Err(e) => {
-                eprintln!("Error reading state file: {}", e);
+                log_error(&mut log_file, &format!("Error reading state file: {}", e));
             }
         }
         
@@ -44,7 +83,7 @@ fn main() {
 }
 
 /// Handle node timeout - check if expired and stop/remove if needed
-fn handle_node_timeout(node_entry: &NodeEntry, timeout: &str) -> Result<(), GmlError> {
+fn handle_node_timeout<W: Write>(log_out: &mut W, node_entry: &NodeEntry, timeout: &str) -> Result<(), GmlError> {
     // Parse the timeout timestamp
     let timeout_dt = DateTime::parse_from_rfc3339(timeout)
         .map_err(|e| GmlError::from(format!("Failed to parse timeout for node {}: {}", node_entry.id, e)))?;
@@ -57,7 +96,7 @@ fn handle_node_timeout(node_entry: &NodeEntry, timeout: &str) -> Result<(), GmlE
         return Ok(());
     }
     
-    println!("Node {} has expired (timeout: {}), deleting...", node_entry.id, timeout);
+    log(log_out, &format!("Node {} has expired (timeout: {}), deleting...", node_entry.id, timeout));
     
     // Call gml node delete command
     let output = Command::new("gml")
@@ -70,13 +109,13 @@ fn handle_node_timeout(node_entry: &NodeEntry, timeout: &str) -> Result<(), GmlE
         return Err(GmlError::from(format!("gml node delete failed: {}", stderr)));
     }
     
-    println!("Successfully deleted node {}", node_entry.id);
+    log(log_out, &format!("Successfully deleted node {}", node_entry.id));
     
     Ok(())
 }
 
 /// Handle cluster timeout - check if expired and stop/remove if needed
-fn handle_cluster_timeout(cluster_entry: &ClusterEntry, timeout: &str) -> Result<(), GmlError> {
+fn handle_cluster_timeout<W: Write>(log_out: &mut W, cluster_entry: &ClusterEntry, timeout: &str) -> Result<(), GmlError> {
     // Parse the timeout timestamp
     let timeout_dt = DateTime::parse_from_rfc3339(timeout)
         .map_err(|e| GmlError::from(format!("Failed to parse timeout for cluster {}: {}", cluster_entry.id, e)))?;
@@ -89,7 +128,7 @@ fn handle_cluster_timeout(cluster_entry: &ClusterEntry, timeout: &str) -> Result
         return Ok(());
     }
     
-    println!("Cluster {} has expired (timeout: {}), deleting...", cluster_entry.id, timeout);
+    log(log_out, &format!("Cluster {} has expired (timeout: {}), deleting...", cluster_entry.id, timeout));
     
     // Call gml cluster delete command
     let output = Command::new("gml")
@@ -102,7 +141,7 @@ fn handle_cluster_timeout(cluster_entry: &ClusterEntry, timeout: &str) -> Result
         return Err(GmlError::from(format!("gml cluster delete failed: {}", stderr)));
     }
     
-    println!("Successfully deleted cluster {}", cluster_entry.id);
+    log(log_out, &format!("Successfully deleted cluster {}", cluster_entry.id));
     
     Ok(())
 }

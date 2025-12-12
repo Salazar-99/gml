@@ -10,4 +10,5 @@ path = "src/main.rs"
 [dependencies]
 gml-core = { path = "../core" }
 chrono = { version = "0.4", features = ["serde"] }
+dirs = "5.0"
 

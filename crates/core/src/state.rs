@@ -21,6 +21,7 @@ pub struct NodeEntry {
     pub created_at: String,
     pub instance_type: String,
     pub timeout: Option<String>, // RFC3339 timestamp in UTC
+    pub user: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +94,7 @@ impl GmlState {
         provider: String,
         instance_type: String,
         timeout: Option<String>, // RFC3339 timestamp in UTC
+        user: String,
     ) -> Result<(), GmlError> {
         let mut state = Self::load()?;
         
@@ -107,6 +109,7 @@ impl GmlState {
             created_at: chrono::Utc::now().to_rfc3339(),
             instance_type,
             timeout,
+            user,
         };
 
         // Check if node already exists (by provider_id to avoid duplicates from same provider)

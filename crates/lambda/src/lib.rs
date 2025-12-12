@@ -1,7 +1,6 @@
 use gml_core::{NodeProvider, NodeRequest, NodeDetails};
 use gml_core::error::GmlError;
 use serde::{Deserialize, Serialize};
-use spinners::{Spinner, Spinners};
 
 const BASE_URL: &str = "https://cloud.lambda.ai/api/v1/";
 pub struct Lambda {
@@ -41,7 +40,7 @@ struct InfoResponseData {
 
 #[derive(Serialize)]
 struct TerminateRequest {
-    instance_id: String,
+    instance_ids: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -106,7 +105,7 @@ impl NodeProvider for Lambda {
         let client = reqwest::blocking::Client::new();
 
         let payload = TerminateRequest {
-            instance_id: details.id.clone(),
+            instance_ids: vec![details.id.clone()],
         };
 
         let url = BASE_URL.to_owned() + "instance-operations/terminate";
@@ -150,8 +149,6 @@ impl Lambda {
         const MAX_RETRIES: u32 = 60; // 10 minutes / 10 seconds = 60 attempts
         const RETRY_DELAY_SECS: u64 = 10;
         
-        let mut spinner = Spinner::new(Spinners::Dots, "Waiting for instance to boot...".into());
-        
         for attempt in 1..=MAX_RETRIES {
             let client = reqwest::blocking::Client::new();
 
@@ -162,54 +159,37 @@ impl Lambda {
                 .header("accept", "application/json")
                 .send()
                 .map_err(|e| {
-                    spinner.stop_with_symbol("✗");
                     GmlError::from(format!("Request failed: {}", e))
                 })?;
                 
             if !response.status().is_success() {
                 let status = response.status();
                 let text = response.text().unwrap_or_default();
-                spinner.stop_with_symbol("✗");
                 return Err(GmlError::from(format!("API Error ({}): {}", status, text)));
             }
 
             let response_text = response.text()
                 .map_err(|e| {
-                    spinner.stop_with_symbol("✗");
                     GmlError::from(format!("Failed to read response body: {}", e))
                 })?;
             
             let info: InfoResponse = serde_json::from_str(&response_text)
                 .map_err(|e| {
-                    spinner.stop_with_symbol("✗");
                     GmlError::from(format!("Failed to parse response: {} - Response body: {}", e, response_text))
                 })?;
 
             // Check if both IP is available and status is "active"
             if let Some(ip) = &info.data.ip {
                 if info.data.status == "active" {
-                    spinner.stop_and_persist("✓", format!("Instance ready! Status: {}, IP: {}", info.data.status, ip));
                     return Ok(ip.clone());
                 }
             }
-
-            // Update spinner message with current status
-            let waiting_for = if info.data.ip.is_some() {
-                format!("active status (current: {})", info.data.status)
-            } else {
-                "IP address".to_string()
-            };
-            let status_msg = format!("Status: {} - Waiting for {} (attempt {}/{})", 
-                                     info.data.status, waiting_for, attempt, MAX_RETRIES);
-            spinner.stop();
-            spinner = Spinner::new(Spinners::Dots, status_msg);
             
             if attempt < MAX_RETRIES {
                 std::thread::sleep(std::time::Duration::from_secs(RETRY_DELAY_SECS));
             }
         }
 
-        spinner.stop_with_symbol("✗");
         Err(GmlError::from(format!(
             "Instance {} did not become active with an IP address after {} minutes. Please try again later.",
             instance_id, (MAX_RETRIES as u64 * RETRY_DELAY_SECS) / 60
