@@ -10,6 +10,7 @@ use sysinfo::System;
 use indicatif::ProgressBar;
 use humantime::parse_duration;
 use dirs;
+use serde_json;
 
 use crate::config;
 use crate::providers;
@@ -253,6 +254,35 @@ pub fn handle_node_timeout_remove(id: String) -> Result<(), Box<dyn std::error::
         .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
 
     spinner.finish_with_message("Timeout removed successfully!");
+    Ok(())
+}
+
+pub fn handle_list_node_types(provider: String) -> Result<(), Box<dyn std::error::Error>> {
+    let spinner = spinner::create_spinner();
+
+    spinner.set_message("Parsing configuration...");
+    let config = config::parse_config()?;
+    let provider_config = config.get_provider(&provider)
+        .ok_or_else(|| format!("Provider '{}' not found in config", provider))?;
+
+    spinner.set_message(format!("Fetching node types for {}...", provider));
+    let provider_handle = providers::create_provider_handle(&provider, provider_config)
+        .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
+
+    let node_types_json = provider_handle.get_node_types()
+        .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
+
+    spinner.finish_with_message("Node types retrieved successfully!");
+    
+    // Parse JSON and print with color
+    let json_value: serde_json::Value = serde_json::from_str(&node_types_json)
+        .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
+    
+    let colored_output = colored_json::to_colored_json_auto(&json_value)
+        .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
+    
+    println!("{}", colored_output);
+    
     Ok(())
 }
 

@@ -142,6 +142,36 @@ impl NodeProvider for Lambda {
     fn get_user(&self) -> Result<String, GmlError> {
         Ok("ubuntu".to_string())
     }
+
+    fn get_node_types(&self) -> Result<String, GmlError> {
+        let client = reqwest::blocking::Client::new();
+        
+        let url = BASE_URL.to_owned() + "instance-types";
+        
+        let response = client.get(&url)
+            .basic_auth(&self.api_key, None::<&str>)
+            .header("accept", "application/json")
+            .send()
+            .map_err(|e| GmlError::from(format!("Request failed: {}", e)))?;
+        
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            return Err(GmlError::from(format!("API Error ({}): {}", status, text)));
+        }
+        
+        let response_text = response.text()
+            .map_err(|e| GmlError::from(format!("Failed to read response body: {}", e)))?;
+        
+        // Parse JSON and pretty print it
+        let json_value: serde_json::Value = serde_json::from_str(&response_text)
+            .map_err(|e| GmlError::from(format!("Failed to parse response: {} - Response body: {}", e, response_text)))?;
+        
+        let pretty_json = serde_json::to_string_pretty(&json_value)
+            .map_err(|e| GmlError::from(format!("Failed to pretty print JSON: {}", e)))?;
+        
+        Ok(pretty_json)
+    }
 }
 
 impl Lambda {

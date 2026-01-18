@@ -21,4 +21,5 @@ uuid = { version = "1.10", features = ["v4", "serde"] }
 indicatif = "0.17"
 sysinfo = "0.30"
 humantime = "2.1"
+colored_json = "2.1"
 

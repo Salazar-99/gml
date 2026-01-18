@@ -59,6 +59,11 @@ enum NodeAction {
         #[command(subcommand)]
         action: TimeoutAction,
     },
+    /// List available node types for a provider
+    ListTypes {
+        #[arg(short, long)]
+        provider: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -132,6 +137,12 @@ fn main() {
                                 std::process::exit(1);
                             }
                         }
+                    }
+                }
+                NodeAction::ListTypes { provider } => {
+                    if let Err(e) = node::handle_list_node_types(provider) {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
                     }
                 }
             }
