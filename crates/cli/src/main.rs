@@ -48,6 +48,8 @@ enum NodeAction {
         instance_type: String,
         #[arg(short, long)]
         timeout: String,
+        #[arg(short, long)]
+        region: Option<String>,
     },
     /// Delete a node
     Delete {
@@ -111,8 +113,8 @@ fn main() {
     match args.command {
         Commands::Node { action } => {
             match action {
-                NodeAction::Create { provider, instance_type, timeout } => {
-                    if let Err(e) = node::handle_create_node(provider, instance_type, timeout) {
+                NodeAction::Create { provider, instance_type, timeout, region } => {
+                    if let Err(e) = node::handle_create_node(provider, instance_type, timeout, region) {
                         eprintln!("Error: {}", e);
                         std::process::exit(1);
                     }

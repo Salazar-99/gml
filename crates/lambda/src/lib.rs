@@ -62,6 +62,7 @@ impl NodeProvider for Lambda {
     fn start_node(&self, request: NodeRequest) -> Result<NodeDetails, GmlError> {
         let client = reqwest::blocking::Client::new();
         
+        // Create launch request with region_name from CLI flag or config
         let payload = LaunchRequest {
             region_name: self.region.clone(),
             instance_type_name: request.instance_type.clone(),
@@ -163,9 +164,20 @@ impl NodeProvider for Lambda {
         let response_text = response.text()
             .map_err(|e| GmlError::from(format!("Failed to read response body: {}", e)))?;
         
-        // Parse JSON and pretty print it
-        let json_value: serde_json::Value = serde_json::from_str(&response_text)
+        // Parse JSON and filter out entries with empty regions_with_capacity_available
+        let mut json_value: serde_json::Value = serde_json::from_str(&response_text)
             .map_err(|e| GmlError::from(format!("Failed to parse response: {} - Response body: {}", e, response_text)))?;
+        
+        // Filter out instance types with empty regions_with_capacity_available
+        // Structure: { "data": { "instance_type_name": { "regions_with_capacity_available": [...] }, ... } }
+        if let Some(serde_json::Value::Object(data_map)) = json_value.get_mut("data") {
+            data_map.retain(|_, instance_data| {
+                instance_data
+                    .get("regions_with_capacity_available")
+                    .and_then(|regions| regions.as_array())
+                    .map_or(false, |regions_array| !regions_array.is_empty())
+            });
+        }
         
         let pretty_json = serde_json::to_string_pretty(&json_value)
             .map_err(|e| GmlError::from(format!("Failed to pretty print JSON: {}", e)))?;

@@ -17,7 +17,7 @@ use crate::providers;
 use crate::spinner;
 use crate::sh;
 
-pub fn handle_create_node(provider: String, instance_type: String, timeout: String) -> Result<(), Box<dyn std::error::Error>> {
+pub fn handle_create_node(provider: String, instance_type: String, timeout: String, region: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let spinner = spinner::create_spinner();
 
     ensure_daemon_running(&spinner)?;
@@ -30,7 +30,7 @@ pub fn handle_create_node(provider: String, instance_type: String, timeout: Stri
         .ok_or_else(|| format!("Provider '{}' not found in config", provider))?;
 
     // Use the config to create a provider handle
-    let provider_handle = providers::create_provider_handle(&provider, provider_config)
+    let provider_handle = providers::create_provider_handle(&provider, provider_config, region)
         .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
 
     let request = NodeRequest {
@@ -74,7 +74,7 @@ pub fn handle_delete_node(id: String) -> Result<(), Box<dyn std::error::Error>> 
     let provider_config = config.get_provider(&node.provider)
         .ok_or_else(|| format!("Provider '{}' not found in config", node.provider))?;
 
-    let provider_handle = providers::create_provider_handle(&node.provider, provider_config)
+    let provider_handle = providers::create_provider_handle(&node.provider, provider_config, None)
         .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
 
     let details = NodeDetails {
@@ -147,9 +147,16 @@ pub fn handle_connect_command(id: String) -> Result<(), Box<dyn std::error::Erro
     if is_git_dir {
         spinner.set_message("Copying .git directory...");
         
-        // Copy .git directory separately
+        // Create .git directory on remote first
+        let mkdir_git_cmd = format!("mkdir -p {}/.git", remote_dir);
+        sh::run(&format!("{} '{}'", ssh_cmd, mkdir_git_cmd))
+            .map_err(|e| format!("Failed to create remote .git directory: {}", e))?;
+        
+        // Copy .git directory contents with proper rsync semantics
+        // Using trailing slashes to copy contents (not the directory itself)
+        // Using --delete to ensure clean sync and remove stale files
         let git_rsync_cmd = format!(
-            "rsync -avz --quiet {}/.git {}@{}:{}/.git",
+            "rsync -avz --quiet --delete {}/.git/ {}@{}:{}/.git/",
             current_dir.display(), node.user, node.ip, remote_dir
         );
 
@@ -184,16 +191,57 @@ pub fn handle_connect_command(id: String) -> Result<(), Box<dyn std::error::Erro
 
             sh::run(&copy_key_cmd)
                 .map_err(|e| format!("Failed to copy SSH key: {}", e))?;
-
-            // Configure git to use SSH
-            let git_config_cmd = format!(
-                "{} 'cd {} && git config --global url.\"git@github.com:\".insteadOf \"https://github.com/\" || true'",
-                ssh_cmd, remote_dir
-            );
-
-            sh::run(&git_config_cmd)
-                .map_err(|e| format!("Failed to configure git SSH: {}", e))?;
         }
+
+        // Configure git to use SSH for this repository (local config, not global)
+        let git_config_cmd = format!(
+            "{} 'cd {} && git config --local url.\"git@github.com:\".insteadOf \"https://github.com/\"'",
+            ssh_cmd, remote_dir
+        );
+
+        sh::run(&git_config_cmd)
+            .map_err(|e| format!("Failed to configure git SSH: {}", e))?;
+
+        // Copy local git user identity to remote (user.name and user.email)
+        if let Some((name, email)) = get_local_git_identity() {
+            spinner.set_message("Configuring Git identity...");
+            
+            let set_name_cmd = format!(
+                "{} 'git config --global user.name \"{}\"'",
+                ssh_cmd, name.replace("\"", "\\\"")
+            );
+            sh::run(&set_name_cmd)
+                .map_err(|e| format!("Failed to set git user.name: {}", e))?;
+            
+            let set_email_cmd = format!(
+                "{} 'git config --global user.email \"{}\"'",
+                ssh_cmd, email.replace("\"", "\\\"")
+            );
+            sh::run(&set_email_cmd)
+                .map_err(|e| format!("Failed to set git user.email: {}", e))?;
+        }
+
+        // Configure LOCAL SSH config to enable agent forwarding when connecting to this host
+        // This allows Cursor's SSH connection to forward your local SSH agent
+        spinner.set_message("Configuring SSH agent forwarding...");
+        configure_local_ssh_agent_forwarding(&home_dir, &node.ip)?;
+
+        // Add GitHub to known_hosts on remote to avoid host verification prompts
+        let add_known_hosts_cmd = format!(
+            "{} 'ssh-keyscan -t ed25519,rsa github.com >> ~/.ssh/known_hosts 2>/dev/null || true'",
+            ssh_cmd
+        );
+        sh::run(&add_known_hosts_cmd)
+            .map_err(|e| format!("Failed to add GitHub to known_hosts: {}", e))?;
+
+        // Reset the git index to ensure working tree matches
+        let git_reset_cmd = format!(
+            "{} 'cd {} && git reset --mixed HEAD 2>/dev/null || true'",
+            ssh_cmd, remote_dir
+        );
+
+        sh::run(&git_reset_cmd)
+            .map_err(|e| format!("Failed to reset git index: {}", e))?;
     }
 
     spinner.set_message("Connecting with Cursor...");
@@ -266,7 +314,7 @@ pub fn handle_list_node_types(provider: String) -> Result<(), Box<dyn std::error
         .ok_or_else(|| format!("Provider '{}' not found in config", provider))?;
 
     spinner.set_message(format!("Fetching node types for {}...", provider));
-    let provider_handle = providers::create_provider_handle(&provider, provider_config)
+    let provider_handle = providers::create_provider_handle(&provider, provider_config, None)
         .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
 
     let node_types_json = provider_handle.get_node_types()
@@ -354,3 +402,76 @@ fn read_gitignore_patterns(dir: &Path) -> Result<Vec<String>, Box<dyn std::error
     Ok(patterns)
 }
 
+/// Get the local git user identity (name and email) from git config
+/// Returns None if either user.name or user.email is not configured
+fn get_local_git_identity() -> Option<(String, String)> {
+    let name = Command::new("git")
+        .args(["config", "--get", "user.name"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())?;
+    
+    let email = Command::new("git")
+        .args(["config", "--get", "user.email"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())?;
+    
+    if name.is_empty() || email.is_empty() {
+        return None;
+    }
+    
+    Some((name, email))
+}
+
+/// Configure local SSH config to enable agent forwarding for a specific host
+/// This adds a Host entry to ~/.ssh/config with ForwardAgent yes
+fn configure_local_ssh_agent_forwarding(home_dir: &Path, host_ip: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let ssh_config_path = home_dir.join(".ssh/config");
+    
+    // Read existing config if it exists
+    let existing_config = if ssh_config_path.exists() {
+        fs::read_to_string(&ssh_config_path)?
+    } else {
+        String::new()
+    };
+    
+    // Check if this host already has ForwardAgent configured
+    let host_pattern = format!("Host {}", host_ip);
+    if existing_config.contains(&host_pattern) {
+        // Host entry exists, check if it has ForwardAgent
+        // For simplicity, we'll skip if the host is already configured
+        return Ok(());
+    }
+    
+    // Create the SSH config directory if it doesn't exist
+    let ssh_dir = home_dir.join(".ssh");
+    if !ssh_dir.exists() {
+        fs::create_dir_all(&ssh_dir)?;
+    }
+    
+    // Append the new host configuration
+    let new_config = format!(
+        "\n# Added by gml connect for SSH agent forwarding\nHost {}\n  ForwardAgent yes\n  AddKeysToAgent yes\n",
+        host_ip
+    );
+    
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&ssh_config_path)?;
+    
+    use std::io::Write;
+    file.write_all(new_config.as_bytes())?;
+    
+    // Set proper permissions on the config file
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&ssh_config_path, fs::Permissions::from_mode(0o600))?;
+    }
+    
+    Ok(())
+}

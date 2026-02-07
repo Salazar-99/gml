@@ -3,7 +3,7 @@ use gml_core::error::GmlError;
 use gml_lambda::Lambda;
 use crate::config::ProviderConfig;
 
-pub fn create_provider_handle(provider_name: &str, provider_config: &ProviderConfig) -> Result<Box<dyn NodeProvider>, GmlError> {
+pub fn create_provider_handle(provider_name: &str, provider_config: &ProviderConfig, region_override: Option<String>) -> Result<Box<dyn NodeProvider>, GmlError> {
     match provider_name {
         "lambda" => {
             let api_key = provider_config.api_key
@@ -14,10 +14,10 @@ pub fn create_provider_handle(provider_name: &str, provider_config: &ProviderCon
                 .as_ref()
                 .ok_or_else(|| GmlError::from("ssh-key is required for lambda provider, set it in your gml config"))?
                 .clone();
-            let region = provider_config.region
-                .as_ref()
-                .ok_or_else(|| GmlError::from("region is required for lambda provider, set it in your gml config"))?
-                .clone();
+            // Use CLI region if provided, otherwise fall back to config
+            let region = region_override
+                .or_else(|| provider_config.region.clone())
+                .ok_or_else(|| GmlError::from("region is required: provide --region flag or set it in your gml config"))?;
             
             Ok(Box::new(Lambda::new(api_key, ssh_key_id, region)))
         }

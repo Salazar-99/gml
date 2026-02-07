@@ -2,7 +2,7 @@
 members = [
     "crates/cli",
     "crates/core",
-    "crates/daemon",
+    "crates/daemon", "crates/gml-operator",
     "crates/lambda",
 ]
 resolver = "2"
