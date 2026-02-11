@@ -1,8 +1,10 @@
 [workspace]
 members = [
-    "crates/cli",
-    "crates/core",
-    "crates/daemon", "crates/gml-operator",
-    "crates/lambda",
+    "crates/gml-cli/cli",
+    "crates/gml-cli/core",
+    "crates/gml-cli/daemon",
+    "crates/gml-cli/lambda",
+    "crates/gml-operator",
+    "crates/gml-scheduler",
 ]
 resolver = "2"

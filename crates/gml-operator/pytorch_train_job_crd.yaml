@@ -1,0 +1,38 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: pytorchtrainjobs.gml.gerardosalazar.com
+spec:
+  group: gml.gerardosalazar.com
+  names:
+    categories: []
+    kind: PyTorchTrainJob
+    plural: pytorchtrainjobs
+    shortNames: []
+    singular: pytorchtrainjob
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns: []
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for PyTorchTrainJobSpec via `CustomResource`
+        properties:
+          spec:
+            properties:
+              image:
+                type: string
+              nodes:
+                format: int32
+                type: integer
+            required:
+            - image
+            - nodes
+            type: object
+        required:
+        - spec
+        title: PyTorchTrainJob
+        type: object
+    served: true
+    storage: true
+    subresources: {}

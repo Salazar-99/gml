@@ -1,0 +1,8 @@
+apiVersion: gml.gerardosalazar.com/v1
+kind: PyTorchTrainJob
+metadata:
+  name: sample-pytorch-train-job
+  namespace: default
+spec:
+  image: pytorch/pytorch:latest
+  nodes: 1
