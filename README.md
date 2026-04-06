@@ -80,3 +80,15 @@ The `ssh-key-name` field is the name of an SSH public key which you have already
 ```bash
 gmld
 ```
+
+## Documentation
+
+The user guide is an [mdBook](https://rust-lang.github.io/mdBook/) project under [`docs/`](./docs/). Pushes to `main` run the **Docs** workflow ([`.github/workflows/docs.yml`](./.github/workflows/docs.yml)), which runs `mdbook build docs` and deploys the static output to **GitHub Pages** (set the repository’s Pages source to **GitHub Actions** in Settings).
+
+To preview changes locally, install mdBook (`cargo install mdbook --locked` is fine), then from the repo root:
+
+```bash
+mdbook serve docs
+```
+
+Open the URL mdBook prints (by default `http://127.0.0.1:3000`); it reloads when you edit the Markdown under `docs/src/`.

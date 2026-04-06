@@ -3,7 +3,7 @@ use gml_core::{NodeDetails, NodeProvider, NodeRequest, error::GmlError};
 use gml_core::ssh;
 use google_cloud_lro::Poller;
 use google_cloud_tpu_v2::client::Tpu;
-use google_cloud_tpu_v2::model::{NetworkConfig, Node};
+use google_cloud_tpu_v2::model::{ListAcceleratorTypesResponse, NetworkConfig, Node};
 use uuid::Uuid;
 
 /// Default TPU VM software image; override with `GML_GOOGLE_TPU_RUNTIME` if your zone needs another version.
@@ -83,6 +83,24 @@ impl Google {
     fn new_node_id() -> String {
         format!("gml-{}", Uuid::new_v4().simple())
     }
+
+    /// Returns true if the API `type` string denotes a single-node TPU (suffix `-1` … `-8`).
+    pub fn is_single_node_accelerator_type(type_str: &str) -> bool {
+        let Some((_, suffix)) = type_str.rsplit_once('-') else {
+            return false;
+        };
+        matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8")
+    }
+
+    /// Restricts [`ListAcceleratorTypesResponse`] to entries whose `type` is a single-node shape.
+    pub fn filter_single_node_accelerator_types(
+        mut response: ListAcceleratorTypesResponse,
+    ) -> ListAcceleratorTypesResponse {
+        response
+            .accelerator_types
+            .retain(|at| Self::is_single_node_accelerator_type(&at.r#type));
+        response
+    }
 }
 
 fn node_to_details(node: Node) -> NodeDetails {
@@ -116,6 +134,8 @@ impl NodeProvider for Google {
             .send()
             .await
             .map_err(map_google_error)?;
+
+        let response = Google::filter_single_node_accelerator_types(response);
 
         serde_json::to_string_pretty(&response)
             .map_err(|e| GmlError::from(format!("Failed to serialize: {}", e)))
@@ -164,5 +184,19 @@ impl NodeProvider for Google {
 
     async fn get_user(&self) -> Result<String, GmlError> {
         Ok(DEFAULT_TPU_SSH_USER.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Google;
+
+    #[test]
+    fn single_node_suffix_1_through_8() {
+        assert!(Google::is_single_node_accelerator_type("v5litepod-2x2-1"));
+        assert!(Google::is_single_node_accelerator_type("foo-8"));
+        assert!(!Google::is_single_node_accelerator_type("v5litepod-2x2-16"));
+        assert!(!Google::is_single_node_accelerator_type("v5litepod-2x2-9"));
+        assert!(!Google::is_single_node_accelerator_type("nohyphen"));
     }
 }
