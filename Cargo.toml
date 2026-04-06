@@ -3,7 +3,8 @@ members = [
     "crates/gml-cli/cli",
     "crates/gml-cli/core",
     "crates/gml-cli/daemon",
-    "crates/gml-cli/lambda",
+    "crates/gml-cli/providers/google",
+    "crates/gml-cli/providers/lambda",
     "crates/gml-operator",
     "crates/gml-scheduler",
 ]

@@ -1,9 +1,15 @@
 use gml_core::NodeProvider;
 use gml_core::error::GmlError;
 use gml_lambda::Lambda;
+use gml_google::Google;
 use crate::config::ProviderConfig;
 
-pub fn create_provider_handle(provider_name: &str, provider_config: &ProviderConfig, region_override: Option<String>) -> Result<Box<dyn NodeProvider>, GmlError> {
+pub async fn create_provider_handle(
+    provider_name: &str,
+    provider_config: &ProviderConfig,
+    region_override: Option<String>,
+    gml_ssh_public_key: Option<String>,
+) -> Result<Box<dyn NodeProvider>, GmlError> {
     match provider_name {
         "lambda" => {
             let api_key = provider_config.api_key
@@ -20,6 +26,15 @@ pub fn create_provider_handle(provider_name: &str, provider_config: &ProviderCon
                 .ok_or_else(|| GmlError::from("region is required: provide --region flag or set it in your gml config"))?;
             
             Ok(Box::new(Lambda::new(api_key, ssh_key_id, region)))
+        }
+        "google" => {
+            let google = Google::new(
+                provider_config.project.clone(),
+                provider_config.region.clone(),
+                gml_ssh_public_key,
+            )
+            .await?;
+            Ok(Box::new(google))
         }
         _ => Err(GmlError::from(format!("Unimplemented provider: {}", provider_name)))
     }

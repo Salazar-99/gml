@@ -107,20 +107,21 @@ enum ClusterAction {
     },
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = Args::parse();
 
     match args.command {
         Commands::Node { action } => {
             match action {
                 NodeAction::Create { provider, instance_type, timeout, region } => {
-                    if let Err(e) = node::handle_create_node(provider, instance_type, timeout, region) {
+                    if let Err(e) = node::handle_create_node(provider, instance_type, timeout, region).await {
                         eprintln!("Error: {}", e);
                         std::process::exit(1);
                     }
                 }
                 NodeAction::Delete { id } => {
-                    if let Err(e) = node::handle_delete_node(id) {
+                    if let Err(e) = node::handle_delete_node(id).await {
                         eprintln!("Error: {}", e);
                         std::process::exit(1);
                     }
@@ -142,7 +143,7 @@ fn main() {
                     }
                 }
                 NodeAction::ListTypes { provider } => {
-                    if let Err(e) = node::handle_list_node_types(provider) {
+                    if let Err(e) = node::handle_list_node_types(provider).await {
                         eprintln!("Error: {}", e);
                         std::process::exit(1);
                     }

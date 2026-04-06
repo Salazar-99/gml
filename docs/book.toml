@@ -1,0 +1,16 @@
+[book]
+title = "gml"
+description = "User guide for gml"
+authors = ["Gerardo Salazar"]
+language = "en"
+
+[build]
+build-dir = "book"
+
+[output.html]
+# Overridden in CI via MDBOOK_OUTPUT__HTML__SITE_URL for GitHub Pages project sites.
+site-url = "/"
+default-theme = "ayu"
+
+[output.html.search]
+enable = true

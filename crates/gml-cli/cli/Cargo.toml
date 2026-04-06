@@ -8,8 +8,10 @@ name = "gml"
 path = "src/main.rs"
 
 [dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 gml-core = { path = "../core" }
-gml-lambda = { path = "../lambda" }
+gml-lambda = { path = "../providers/lambda" }
+gml-google = { path = "../providers/google" }
 clap = { version = "4.5.51", features = ["derive"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0"
