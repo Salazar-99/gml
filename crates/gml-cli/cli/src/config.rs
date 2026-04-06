@@ -8,6 +8,8 @@ const CONFIG_PATH: &str = "~/.gml/config.toml";
 #[derive(Debug)]
 pub struct Config {
     providers: HashMap<String, ProviderConfig>,
+    /// From `[gml] ssh-public-key` — path to the SSH public key used for `connect` and Google TPU metadata.
+    pub ssh_public_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -18,6 +20,8 @@ pub struct ProviderConfig {
     pub ssh_key: Option<String>,
     #[serde(rename = "region")]
     pub region: Option<String>,
+    #[serde(rename = "project")]
+    pub project: Option<String>,
 }
 
 impl Config {
@@ -30,6 +34,12 @@ impl Config {
     pub fn provider_names(&self) -> Vec<&String> {
         self.providers.keys().collect()
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct GmlSection {
+    #[serde(rename = "ssh-public-key")]
+    ssh_public_key: Option<String>,
 }
 
 fn expand_tilde(path: &str) -> PathBuf {
@@ -49,10 +59,21 @@ pub fn parse_config() -> Result<Config, Box<dyn std::error::Error>> {
     let toml_value: toml::Value = toml::from_str(&config_content)?;
     
     let mut providers = HashMap::new();
+    let mut ssh_public_key = None;
     
     // Extract all top-level tables (provider blocks)
     if let toml::Value::Table(root_table) = toml_value {
+        if let Some(toml::Value::Table(gml_table)) = root_table.get("gml") {
+            let table_value = toml::Value::Table(gml_table.clone());
+            let table_str = toml::to_string(&table_value)?;
+            let gml: GmlSection = toml::from_str(&table_str)?;
+            ssh_public_key = gml.ssh_public_key;
+        }
+
         for (key, value) in root_table {
+            if key == "gml" {
+                continue;
+            }
             // Try to deserialize each table as a ProviderConfig
             if let toml::Value::Table(table) = value {
                 // Create a new TOML value with just this table and deserialize it
@@ -71,7 +92,10 @@ pub fn parse_config() -> Result<Config, Box<dyn std::error::Error>> {
         }
     }
     
-    Ok(Config { providers })
+    Ok(Config {
+        providers,
+        ssh_public_key,
+    })
 }
 
 pub fn parse_config_for_provider(provider: &str) -> Result<ProviderConfig, Box<dyn std::error::Error>> {

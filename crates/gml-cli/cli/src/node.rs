@@ -1,5 +1,6 @@
 use chrono::Utc;
 use gml_core::{NodeRequest, NodeDetails};
+use gml_core::ssh;
 use gml_core::state::GmlState;
 use std::process::{Command, Stdio};
 use std::env;
@@ -17,10 +18,10 @@ use crate::providers;
 use crate::spinner;
 use crate::sh;
 
-pub fn handle_create_node(provider: String, instance_type: String, timeout: String, region: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn handle_create_node(provider: String, instance_type: String, timeout: String, region: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let spinner = spinner::create_spinner();
 
-    ensure_daemon_running(&spinner)?;
+    ensure_daemon_running(&spinner).await?;
 
     // Parse config from ~/.gml/config.toml
     let config = config::parse_config()?;
@@ -30,7 +31,13 @@ pub fn handle_create_node(provider: String, instance_type: String, timeout: Stri
         .ok_or_else(|| format!("Provider '{}' not found in config", provider))?;
 
     // Use the config to create a provider handle
-    let provider_handle = providers::create_provider_handle(&provider, provider_config, region)
+    let provider_handle = providers::create_provider_handle(
+        &provider,
+        provider_config,
+        region,
+        config.ssh_public_key.clone(),
+    )
+        .await
         .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
 
     let request = NodeRequest {
@@ -39,9 +46,11 @@ pub fn handle_create_node(provider: String, instance_type: String, timeout: Stri
 
     spinner.set_message(format!("Creating node with provider {}...", provider));
     let details = provider_handle.start_node(request)
+        .await
         .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
     
     let user = provider_handle.get_user()
+        .await
         .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
     
     // Parse timeout duration and calculate expiration time
@@ -58,7 +67,7 @@ pub fn handle_create_node(provider: String, instance_type: String, timeout: Stri
     Ok(())
 }
 
-pub fn handle_delete_node(id: String) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn handle_delete_node(id: String) -> Result<(), Box<dyn std::error::Error>> {
     let spinner = spinner::create_spinner();
 
     spinner.set_message("Locating node...");
@@ -74,7 +83,13 @@ pub fn handle_delete_node(id: String) -> Result<(), Box<dyn std::error::Error>> 
     let provider_config = config.get_provider(&node.provider)
         .ok_or_else(|| format!("Provider '{}' not found in config", node.provider))?;
 
-    let provider_handle = providers::create_provider_handle(&node.provider, provider_config, None)
+    let provider_handle = providers::create_provider_handle(
+        &node.provider,
+        provider_config,
+        None,
+        config.ssh_public_key.clone(),
+    )
+        .await
         .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
 
     let details = NodeDetails {
@@ -84,6 +99,7 @@ pub fn handle_delete_node(id: String) -> Result<(), Box<dyn std::error::Error>> 
 
     spinner.set_message(format!("Stopping node with provider {}...", node.provider));
     provider_handle.stop_node(details)
+        .await
         .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
 
     spinner.set_message("Removing from state...");
@@ -164,34 +180,20 @@ pub fn handle_connect_command(id: String) -> Result<(), Box<dyn std::error::Erro
             .map_err(|e| format!("Failed to copy .git directory: {}", e))?;
 
         spinner.set_message("Configuring Git SSH...");
-        
-        // Find SSH public key (try common locations)
-        let home_dir = dirs::home_dir()
-            .ok_or("Unable to determine home directory")?;
-        let ssh_key_paths = vec![
-            home_dir.join(".ssh/id_rsa.pub"),
-            home_dir.join(".ssh/id_ed25519.pub"),
-            home_dir.join(".ssh/id_ecdsa.pub"),
-        ];
 
-        let mut ssh_key_path = None;
-        for path in &ssh_key_paths {
-            if path.exists() {
-                ssh_key_path = Some(path.clone());
-                break;
-            }
-        }
+        let app_config = config::parse_config().map_err(|e| e.to_string())?;
+        let key_path = ssh::get_ssh_public_key(app_config.ssh_public_key.as_deref())
+            .map_err(|e| e.to_string())?;
 
-        if let Some(key_path) = ssh_key_path {
-            // Copy SSH public key to remote machine's authorized_keys
-            let copy_key_cmd = format!(
-                "cat {} | {} 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && chmod 700 ~/.ssh'",
-                key_path.display(), ssh_cmd
-            );
+        // Copy SSH public key to remote machine's authorized_keys
+        let copy_key_cmd = format!(
+            "cat {} | {} 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && chmod 700 ~/.ssh'",
+            key_path.display(),
+            ssh_cmd
+        );
 
-            sh::run(&copy_key_cmd)
-                .map_err(|e| format!("Failed to copy SSH key: {}", e))?;
-        }
+        sh::run(&copy_key_cmd)
+            .map_err(|e| format!("Failed to copy SSH key: {}", e))?;
 
         // Configure git to use SSH for this repository (local config, not global)
         let git_config_cmd = format!(
@@ -224,6 +226,7 @@ pub fn handle_connect_command(id: String) -> Result<(), Box<dyn std::error::Erro
         // Configure LOCAL SSH config to enable agent forwarding when connecting to this host
         // This allows Cursor's SSH connection to forward your local SSH agent
         spinner.set_message("Configuring SSH agent forwarding...");
+        let home_dir = dirs::home_dir().ok_or("Unable to determine home directory")?;
         configure_local_ssh_agent_forwarding(&home_dir, &node.ip)?;
 
         // Add GitHub to known_hosts on remote to avoid host verification prompts
@@ -305,7 +308,7 @@ pub fn handle_node_timeout_remove(id: String) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
-pub fn handle_list_node_types(provider: String) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn handle_list_node_types(provider: String) -> Result<(), Box<dyn std::error::Error>> {
     let spinner = spinner::create_spinner();
 
     spinner.set_message("Parsing configuration...");
@@ -314,10 +317,17 @@ pub fn handle_list_node_types(provider: String) -> Result<(), Box<dyn std::error
         .ok_or_else(|| format!("Provider '{}' not found in config", provider))?;
 
     spinner.set_message(format!("Fetching node types for {}...", provider));
-    let provider_handle = providers::create_provider_handle(&provider, provider_config, None)
+    let provider_handle = providers::create_provider_handle(
+        &provider,
+        provider_config,
+        None,
+        config.ssh_public_key.clone(),
+    )
+        .await
         .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
 
     let node_types_json = provider_handle.get_node_types()
+        .await
         .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
 
     spinner.finish_with_message("Node types retrieved successfully!");
@@ -334,7 +344,7 @@ pub fn handle_list_node_types(provider: String) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
-fn ensure_daemon_running(_spinner: &ProgressBar) -> Result<(), Box<dyn std::error::Error>> {
+async fn ensure_daemon_running(_spinner: &ProgressBar) -> Result<(), Box<dyn std::error::Error>> {
     let mut system = System::new_all();
     system.refresh_all();
     
@@ -361,7 +371,7 @@ fn ensure_daemon_running(_spinner: &ProgressBar) -> Result<(), Box<dyn std::erro
             .map_err(|e| format!("Failed to start daemon: {}", e))?;
             
         // Give it a moment to start
-        std::thread::sleep(Duration::from_secs(1));
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
     
     Ok(())

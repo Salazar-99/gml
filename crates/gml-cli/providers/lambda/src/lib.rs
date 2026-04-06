@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use gml_core::{NodeProvider, NodeRequest, NodeDetails};
 use gml_core::error::GmlError;
 use serde::{Deserialize, Serialize};
@@ -58,9 +59,10 @@ struct TerminatedInstance {
     id: String,
 }
 
+#[async_trait]
 impl NodeProvider for Lambda {
-    fn start_node(&self, request: NodeRequest) -> Result<NodeDetails, GmlError> {
-        let client = reqwest::blocking::Client::new();
+    async fn start_node(&self, request: NodeRequest) -> Result<NodeDetails, GmlError> {
+        let client = reqwest::Client::new();
         
         // Create launch request with region_name from CLI flag or config
         let payload = LaunchRequest {
@@ -76,15 +78,17 @@ impl NodeProvider for Lambda {
             .header("accept", "application/json")
             .json(&payload)
             .send()
+            .await
             .map_err(|e| GmlError::from(format!("Request failed: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().unwrap_or_default();
+            let text = response.text().await.unwrap_or_default();
             return Err(GmlError::from(format!("API Error ({}): {}", status, text)));
         }
 
         let response_text = response.text()
+            .await
             .map_err(|e| GmlError::from(format!("Failed to read response body: {}", e)))?;
         
         let launch_response: LaunchResponse = serde_json::from_str(&response_text)
@@ -94,7 +98,7 @@ impl NodeProvider for Lambda {
             .ok_or_else(|| GmlError::from("No instance ID returned"))?
             .clone();
 
-        let ip = self.get_node_ip(&instance_id)?;
+        let ip = self.get_node_ip(&instance_id).await?;
 
         Ok(NodeDetails {
             ip: ip,
@@ -102,8 +106,8 @@ impl NodeProvider for Lambda {
         })
     }
 
-    fn stop_node(&self, details: NodeDetails) -> Result<NodeDetails, GmlError> {
-        let client = reqwest::blocking::Client::new();
+    async fn stop_node(&self, details: NodeDetails) -> Result<NodeDetails, GmlError> {
+        let client = reqwest::Client::new();
 
         let payload = TerminateRequest {
             instance_ids: vec![details.id.clone()],
@@ -116,15 +120,17 @@ impl NodeProvider for Lambda {
             .header("accept", "application/json")
             .json(&payload)
             .send()
+            .await
             .map_err(|e| GmlError::from(format!("Request failed: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().unwrap_or_default();
+            let text = response.text().await.unwrap_or_default();
             return Err(GmlError::from(format!("API Error ({}): {}", status, text)));
         }
 
         let response_text = response.text()
+            .await
             .map_err(|e| GmlError::from(format!("Failed to read response body: {}", e)))?;
         
         let terminate_response: TerminateResponse = serde_json::from_str(&response_text)
@@ -140,12 +146,12 @@ impl NodeProvider for Lambda {
     }
 
     /// Hardcoded Ubuntu user, works for default Lambda Stack image
-    fn get_user(&self) -> Result<String, GmlError> {
+    async fn get_user(&self) -> Result<String, GmlError> {
         Ok("ubuntu".to_string())
     }
 
-    fn get_node_types(&self) -> Result<String, GmlError> {
-        let client = reqwest::blocking::Client::new();
+    async fn get_node_types(&self) -> Result<String, GmlError> {
+        let client = reqwest::Client::new();
         
         let url = BASE_URL.to_owned() + "instance-types";
         
@@ -153,15 +159,17 @@ impl NodeProvider for Lambda {
             .basic_auth(&self.api_key, None::<&str>)
             .header("accept", "application/json")
             .send()
+            .await
             .map_err(|e| GmlError::from(format!("Request failed: {}", e)))?;
         
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().unwrap_or_default();
+            let text = response.text().await.unwrap_or_default();
             return Err(GmlError::from(format!("API Error ({}): {}", status, text)));
         }
         
         let response_text = response.text()
+            .await
             .map_err(|e| GmlError::from(format!("Failed to read response body: {}", e)))?;
         
         // Parse JSON and filter out entries with empty regions_with_capacity_available
@@ -187,30 +195,32 @@ impl NodeProvider for Lambda {
 }
 
 impl Lambda {
-    fn get_node_ip(&self, instance_id: &str) -> Result<String, GmlError> {
+    async fn get_node_ip(&self, instance_id: &str) -> Result<String, GmlError> {
         const MAX_RETRIES: u32 = 60; // 10 minutes / 10 seconds = 60 attempts
         const RETRY_DELAY_SECS: u64 = 10;
         
+        let client = reqwest::Client::new();
+        
         for attempt in 1..=MAX_RETRIES {
-            let client = reqwest::blocking::Client::new();
-
             let url = format!("{}instances/{}", BASE_URL, instance_id);
 
             let response = client.get(&url)
                 .basic_auth(&self.api_key, None::<&str>)
                 .header("accept", "application/json")
                 .send()
+                .await
                 .map_err(|e| {
                     GmlError::from(format!("Request failed: {}", e))
                 })?;
                 
             if !response.status().is_success() {
                 let status = response.status();
-                let text = response.text().unwrap_or_default();
+                let text = response.text().await.unwrap_or_default();
                 return Err(GmlError::from(format!("API Error ({}): {}", status, text)));
             }
 
             let response_text = response.text()
+                .await
                 .map_err(|e| {
                     GmlError::from(format!("Failed to read response body: {}", e))
                 })?;
@@ -228,7 +238,7 @@ impl Lambda {
             }
             
             if attempt < MAX_RETRIES {
-                std::thread::sleep(std::time::Duration::from_secs(RETRY_DELAY_SECS));
+                tokio::time::sleep(std::time::Duration::from_secs(RETRY_DELAY_SECS)).await;
             }
         }
 
