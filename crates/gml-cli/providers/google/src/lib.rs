@@ -3,7 +3,7 @@ use gml_core::{NodeDetails, NodeProvider, NodeRequest, error::GmlError};
 use gml_core::ssh;
 use google_cloud_lro::Poller;
 use google_cloud_tpu_v2::client::Tpu;
-use google_cloud_tpu_v2::model::{ListAcceleratorTypesResponse, NetworkConfig, Node};
+use google_cloud_tpu_v2::model::{ListAcceleratorTypesResponse, NetworkConfig, Node, ServiceAccount};
 use uuid::Uuid;
 
 /// Default TPU VM software image; override with `GML_GOOGLE_TPU_RUNTIME` if your zone needs another version.
@@ -151,10 +151,15 @@ impl NodeProvider for Google {
         let ssh_keys = self.ssh_keys_metadata_value()?;
         // Request a public IP on the default VPC so `gml connect` can SSH without IAP/tunneling.
         let network_config = NetworkConfig::new().set_enable_external_ips(true);
+        // Attach the default Compute Engine SA with `cloud-platform` scope so workloads on the TPU
+        // can transparently reach GCS and other GCP APIs via ADC (still gated by IAM on the SA).
+        let service_account = ServiceAccount::new()
+            .set_scope(["https://www.googleapis.com/auth/cloud-platform"]);
         let node_spec = Node::new()
             .set_accelerator_type(request.instance_type)
             .set_runtime_version(Google::runtime_version())
             .set_network_config(network_config)
+            .set_service_account(service_account)
             .set_metadata([("ssh-keys", ssh_keys)]);
 
         let node = self
