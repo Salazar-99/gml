@@ -2,6 +2,9 @@
 name = "gml"
 version = "0.1.0"
 edition = "2021"
+repository = "https://github.com/Salazar-99/gml"
+homepage = "https://salazar-99.github.io/gml/"
+description = "CLI for provisioning and managing GPU machines across cloud providers"
 
 [[bin]]
 name = "gml"

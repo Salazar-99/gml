@@ -2,6 +2,9 @@
 name = "gml-operator"
 version = "0.1.0"
 edition = "2024"
+repository = "https://github.com/Salazar-99/gml"
+homepage = "https://salazar-99.github.io/gml/"
+description = "Kubernetes operator for the gml GPU machine management CLI"
 
 [dependencies]
 kube = { version = "3.0.1", features = ["runtime", "derive"] }
@@ -13,6 +16,9 @@ serde_yaml = "0.9"
 futures = "0.3"
 tokio = { version = "1", features = ["full"] }
 thiserror = "1"
+
+[package.metadata.dist]
+dist = false
 
 [[bin]]
 name = "crdgen"
