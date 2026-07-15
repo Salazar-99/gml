@@ -1,7 +1,7 @@
 use chrono::Utc;
 use gml_core::{NodeRequest, NodeDetails};
 use gml_core::ssh;
-use gml_core::state::GmlState;
+use gml_core::state::{GmlState, NodeEntry};
 use std::process::{Command, Stdio};
 use std::env;
 use std::time::Duration;
@@ -18,7 +18,7 @@ use crate::providers;
 use crate::spinner;
 use crate::sh;
 
-pub async fn handle_create_node(provider: String, instance_type: String, timeout: String, region: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn handle_create_node(provider: String, instance_type: String, timeout: String, region: Option<String>, name: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let spinner = spinner::create_spinner();
 
     ensure_daemon_running(&spinner).await?;
@@ -60,10 +60,11 @@ pub async fn handle_create_node(provider: String, instance_type: String, timeout
             expiration.to_rfc3339()
         });
     
-    GmlState::add_node(details, provider.clone(), instance_type.clone(), timeout_expiration, user)
+    GmlState::add_node(details, provider.clone(), instance_type.clone(), timeout_expiration, user, name.clone())
         .map_err(|e| Box::from(e) as Box<dyn std::error::Error>)?;
 
-    spinner.finish_with_message("Node created successfully!");
+    let created_label = name.as_deref().unwrap_or("Node");
+    spinner.finish_with_message(format!("{} created successfully!", created_label));
     Ok(())
 }
 
@@ -120,44 +121,13 @@ pub fn handle_connect_command(id: String) -> Result<(), Box<dyn std::error::Erro
         None => return Err(format!("Node with ID '{}' not found", id).into()),
     };
 
-    spinner.set_message("Getting current working directory...");
-    let current_dir = env::current_dir()?;
-    let dir_name = current_dir.file_name()
-        .ok_or("Failed to get directory name")?
-        .to_str()
-        .ok_or("Directory name contains invalid UTF-8")?;
-
-    // Check if in a git directory
-    let is_git_dir = current_dir.join(".git").exists();
-
     spinner.set_message(format!("Copying directory to {}@{}...", node.user, node.ip));
-    
-    // Create remote directory first
-    let remote_dir = format!("/home/{}/{}", node.user, dir_name);
+    let remote_dir = sync_cwd_to_node(&node)?;
+
+    // Recompute the cheap locals the git-configuration steps below rely on
+    let current_dir = env::current_dir()?;
+    let is_git_dir = current_dir.join(".git").exists();
     let ssh_cmd = format!("ssh -o StrictHostKeyChecking=no {}@{}", node.user, node.ip);
-    let mkdir_cmd = format!("mkdir -p {}", remote_dir);
-    
-    sh::run(&format!("{} '{}'", ssh_cmd, mkdir_cmd))
-        .map_err(|e| format!("Failed to create remote directory: {}", e))?;
-
-    // Build rsync exclude patterns from .gitignore
-    let mut exclude_patterns = vec!["--exclude".to_string(), ".git".to_string()];
-    if let Ok(patterns) = read_gitignore_patterns(&current_dir) {
-        for pattern in patterns {
-            exclude_patterns.push("--exclude".to_string());
-            exclude_patterns.push(pattern);
-        }
-    }
-
-    // Copy FROM local TO remote
-    let exclude_args = exclude_patterns.join(" ");
-    let rsync_cmd = format!(
-        "rsync -avz --quiet {} {}/ {}@{}:{}/",
-        exclude_args, current_dir.display(), node.user, node.ip, remote_dir
-    );
-
-    sh::run(&rsync_cmd)
-        .map_err(|_| -> Box<dyn std::error::Error> { "Failed to copy directory to remote machine".into() })?;
 
     // If in a git directory, copy .git directory and configure git ssh
     if is_git_dir {
@@ -259,6 +229,109 @@ pub fn handle_connect_command(id: String) -> Result<(), Box<dyn std::error::Erro
         .map_err(|e| format!("Failed to launch Cursor: {}. Make sure Cursor is installed and in your PATH.", e))?;
 
     Ok(())
+}
+
+/// Rsyncs the current working directory to the node and returns the remote
+/// directory path (`/home/<user>/<dir-name>`). Excludes `.git` and any patterns
+/// found in a local `.gitignore`. Shared by `connect` and `run --sync`.
+fn sync_cwd_to_node(node: &NodeEntry) -> Result<String, Box<dyn std::error::Error>> {
+    let current_dir = env::current_dir()?;
+    let dir_name = current_dir.file_name()
+        .ok_or("Failed to get directory name")?
+        .to_str()
+        .ok_or("Directory name contains invalid UTF-8")?;
+
+    let remote_dir = format!("/home/{}/{}", node.user, dir_name);
+    let ssh_cmd = format!("ssh -o StrictHostKeyChecking=no {}@{}", node.user, node.ip);
+
+    // Create remote directory first
+    let mkdir_cmd = format!("mkdir -p {}", remote_dir);
+    sh::run(&format!("{} '{}'", ssh_cmd, mkdir_cmd))
+        .map_err(|e| format!("Failed to create remote directory: {}", e))?;
+
+    // Build rsync exclude patterns from .gitignore
+    let mut exclude_patterns = vec!["--exclude".to_string(), ".git".to_string()];
+    if let Ok(patterns) = read_gitignore_patterns(&current_dir) {
+        for pattern in patterns {
+            exclude_patterns.push("--exclude".to_string());
+            exclude_patterns.push(pattern);
+        }
+    }
+
+    // Copy FROM local TO remote
+    let exclude_args = exclude_patterns.join(" ");
+    let rsync_cmd = format!(
+        "rsync -avz --quiet {} {}/ {}@{}:{}/",
+        exclude_args, current_dir.display(), node.user, node.ip, remote_dir
+    );
+    sh::run(&rsync_cmd)
+        .map_err(|_| -> Box<dyn std::error::Error> { "Failed to copy directory to remote machine".into() })?;
+
+    Ok(remote_dir)
+}
+
+/// Escapes a string for safe embedding inside single quotes in a POSIX shell,
+/// using the standard `'\''` idiom.
+fn shell_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Builds the command string sent to the remote shell over SSH.
+///
+/// The command is passed through verbatim so the remote shell performs the single,
+/// authoritative parse of exactly what the caller quoted (like `ssh host "<cmd>"`).
+///
+/// - When `remote_dir` is set, the command is prefixed with `cd <dir> && `.
+/// - When `detach` is set, the command is wrapped in `nohup sh -c '...' &` and its
+///   output redirected to `~/gml-run.log` so it survives disconnect.
+fn build_remote_command(remote_dir: Option<&str>, detach: bool, command: &str) -> String {
+    let inner = match remote_dir {
+        Some(dir) => format!("cd {} && {}", dir, command),
+        None => command.to_string(),
+    };
+    if detach {
+        format!("nohup sh -c {} > ~/gml-run.log 2>&1 &", shell_single_quote(&inner))
+    } else {
+        inner
+    }
+}
+
+/// Runs a command on a node over SSH (non-interactive). Returns the remote
+/// command's exit code so the caller can propagate it.
+pub fn handle_run_command(
+    id: String,
+    sync: bool,
+    detach: bool,
+    command: String,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let node = match GmlState::get_node(&id)? {
+        Some(n) => n,
+        None => return Err(format!("Node with ID '{}' not found", id).into()),
+    };
+
+    let remote_dir = if sync {
+        Some(sync_cwd_to_node(&node)?)
+    } else {
+        None
+    };
+
+    let remote_cmd = build_remote_command(remote_dir.as_deref(), detach, &command);
+
+    // Invoke ssh directly (not via `sh -c`) so stdio streams live and the remote
+    // exit code is available. `BatchMode=yes` makes auth failures fail fast instead
+    // of hanging on a password prompt.
+    let status = Command::new("ssh")
+        .args(["-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"])
+        .arg(format!("{}@{}", node.user, node.ip))
+        .arg(&remote_cmd)
+        .status()
+        .map_err(|e| format!("Failed to run ssh: {}", e))?;
+
+    if detach {
+        println!("Job started on {}; logs at ~/gml-run.log", node.display_id());
+    }
+
+    Ok(status.code().unwrap_or(1))
 }
 
 pub fn handle_node_timeout_reset(id: String, duration: String) -> Result<(), Box<dyn std::error::Error>> {
@@ -482,6 +555,48 @@ fn configure_local_ssh_agent_forwarding(home_dir: &Path, host_ip: &str) -> Resul
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&ssh_config_path, fs::Permissions::from_mode(0o600))?;
     }
-    
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_command_is_passed_through_verbatim() {
+        let out = build_remote_command(None, false, "python train.py --epochs 10");
+        assert_eq!(out, "python train.py --epochs 10");
+    }
+
+    #[test]
+    fn quoting_is_preserved_so_the_remote_parses_it() {
+        // The caller's quoting survives untouched; the remote shell does the parse.
+        let out = build_remote_command(None, false, "sh -c 'exit 42'");
+        assert_eq!(out, "sh -c 'exit 42'");
+    }
+
+    #[test]
+    fn sync_prefixes_cd_into_remote_dir() {
+        let out = build_remote_command(Some("/home/ubuntu/proj"), false, "ls -la");
+        assert_eq!(out, "cd /home/ubuntu/proj && ls -la");
+    }
+
+    #[test]
+    fn detach_wraps_in_nohup_and_redirects_logs() {
+        let out = build_remote_command(None, true, "python train.py");
+        assert_eq!(out, "nohup sh -c 'python train.py' > ~/gml-run.log 2>&1 &");
+    }
+
+    #[test]
+    fn detach_with_sync_wraps_the_cd_prefixed_command() {
+        let out = build_remote_command(Some("/home/ubuntu/proj"), true, "make");
+        assert_eq!(out, "nohup sh -c 'cd /home/ubuntu/proj && make' > ~/gml-run.log 2>&1 &");
+    }
+
+    #[test]
+    fn detach_escapes_single_quotes_in_the_command() {
+        let out = build_remote_command(None, true, "echo it's");
+        assert_eq!(out, "nohup sh -c 'echo it'\\''s' > ~/gml-run.log 2>&1 &");
+    }
 }

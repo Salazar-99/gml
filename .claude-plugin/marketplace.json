@@ -1,0 +1,18 @@
+{
+  "name": "gml",
+  "owner": {
+    "name": "Gerardo Salazar",
+    "url": "https://github.com/Salazar-99"
+  },
+  "metadata": {
+    "description": "Marketplace for the gml GPU-node tooling.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "gml",
+      "source": "./plugins/gml",
+      "description": "Teaches agents to provision ephemeral GPU nodes and run jobs on them with the gml CLI."
+    }
+  ]
+}

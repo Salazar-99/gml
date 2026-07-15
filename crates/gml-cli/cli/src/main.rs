@@ -36,6 +36,20 @@ enum Commands {
         /// The ID of the node
         id: String,
     },
+    /// Run a command on a node over SSH (non-interactive)
+    Run {
+        /// Node ID or friendly name
+        id: String,
+        /// Sync the current directory to the node before running
+        #[arg(long)]
+        sync: bool,
+        /// Run detached so the job survives disconnect (logs to ~/gml-run.log)
+        #[arg(long)]
+        detach: bool,
+        /// The command to run, as a single quoted string (e.g. "python train.py --epochs 10")
+        #[arg(allow_hyphen_values = true)]
+        command: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -50,6 +64,9 @@ enum NodeAction {
         timeout: String,
         #[arg(short, long)]
         region: Option<String>,
+        /// A friendly name used in place of the generated ID for `gml ls` and `gml connect`
+        #[arg(short, long)]
+        name: Option<String>,
     },
     /// Delete a node
     Delete {
@@ -97,6 +114,9 @@ enum ClusterAction {
         nodes: Option<i32>,
         #[arg(short, long)]
         timeout: Option<String>,
+        /// A friendly name used in place of the generated ID for `gml ls` and `gml connect`
+        #[arg(long)]
+        name: Option<String>,
     },
     /// Delete a cluster
     Delete {
@@ -114,8 +134,8 @@ async fn main() {
     match args.command {
         Commands::Node { action } => {
             match action {
-                NodeAction::Create { provider, instance_type, timeout, region } => {
-                    if let Err(e) = node::handle_create_node(provider, instance_type, timeout, region).await {
+                NodeAction::Create { provider, instance_type, timeout, region, name } => {
+                    if let Err(e) = node::handle_create_node(provider, instance_type, timeout, region, name).await {
                         eprintln!("Error: {}", e);
                         std::process::exit(1);
                     }
@@ -152,8 +172,8 @@ async fn main() {
         }
         Commands::Cluster { action } => {
             match action {
-                ClusterAction::Create { provider, nodes, timeout } => {
-                    if let Err(e) = cluster::handle_create_cluster(provider, nodes, timeout) {
+                ClusterAction::Create { provider, nodes, timeout, name } => {
+                    if let Err(e) = cluster::handle_create_cluster(provider, nodes, timeout, name) {
                         eprintln!("Error: {}", e);
                         std::process::exit(1);
                     }
@@ -173,6 +193,15 @@ async fn main() {
             if let Err(e) = node::handle_connect_command(id) {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
+            }
+        }
+        Commands::Run { id, sync, detach, command } => {
+            match node::handle_run_command(id, sync, detach, command) {
+                Ok(code) => std::process::exit(code),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
             }
         }
     }

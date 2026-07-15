@@ -1,0 +1,13 @@
+{
+  "name": "gml",
+  "version": "0.1.0",
+  "description": "Provision ephemeral GPU nodes and run jobs on them with the gml CLI.",
+  "author": {
+    "name": "Gerardo Salazar",
+    "url": "https://github.com/Salazar-99"
+  },
+  "homepage": "https://salazar-99.github.io/gml/",
+  "repository": "https://github.com/Salazar-99/gml",
+  "license": "MIT",
+  "keywords": ["gml", "gpu", "lambda", "cloud", "ssh", "training"]
+}

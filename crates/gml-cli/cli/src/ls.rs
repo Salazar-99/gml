@@ -23,7 +23,7 @@ pub fn handle_ls_command() {
                     let time_remaining = format_time_remaining(&node.timeout);
                     
                     table.add_row(vec![
-                        Cell::new(&node.id),
+                        Cell::new(node.display_id()),
                         Cell::new(&node.ip),
                         Cell::new(&node.provider),
                         Cell::new(&node.instance_type),
@@ -62,7 +62,7 @@ pub fn handle_ls_command() {
                     let timeout_display = cluster.timeout.as_deref().unwrap_or("None");
                     
                     table.add_row(vec![
-                        Cell::new(&cluster.id),
+                        Cell::new(cluster.display_id()),
                         Cell::new(&cluster.provider),
                         Cell::new(cluster.node_count),
                         Cell::new(timeout_display),

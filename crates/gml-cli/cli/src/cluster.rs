@@ -1,5 +1,5 @@
-pub fn handle_create_cluster(provider: String, nodes: Option<i32>, _timeout: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Creating cluster with provider: {} and {:?} nodes", provider, nodes);
+pub fn handle_create_cluster(provider: String, nodes: Option<i32>, _timeout: Option<String>, name: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Creating cluster with provider: {} and {:?} nodes (name: {:?})", provider, nodes, name);
     // TODO: Implement cluster creation logic
     Ok(())
 }

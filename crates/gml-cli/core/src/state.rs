@@ -22,6 +22,8 @@ pub struct NodeEntry {
     pub instance_type: String,
     pub timeout: Option<String>, // RFC3339 timestamp in UTC
     pub user: String,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +33,32 @@ pub struct ClusterEntry {
     pub created_at: String,
     pub node_count: usize,
     pub timeout: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+impl NodeEntry {
+    /// The user-facing identifier: the name if set, otherwise the generated id
+    pub fn display_id(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.id)
+    }
+
+    /// Whether the given identifier matches this node by id or by name
+    pub fn matches(&self, identifier: &str) -> bool {
+        self.id == identifier || self.name.as_deref() == Some(identifier)
+    }
+}
+
+impl ClusterEntry {
+    /// The user-facing identifier: the name if set, otherwise the id
+    pub fn display_id(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.id)
+    }
+
+    /// Whether the given identifier matches this cluster by id or by name
+    pub fn matches(&self, identifier: &str) -> bool {
+        self.id == identifier || self.name.as_deref() == Some(identifier)
+    }
 }
 
 impl Default for GmlState {
@@ -95,12 +123,20 @@ impl GmlState {
         instance_type: String,
         timeout: Option<String>, // RFC3339 timestamp in UTC
         user: String,
+        name: Option<String>,
     ) -> Result<(), GmlError> {
         let mut state = Self::load()?;
-        
+
         // Generate a unique ID for the state
         let unique_id = uuid::Uuid::new_v4().to_string();
-        
+
+        // If a name is provided, ensure it's unique and doesn't collide with an id
+        if let Some(name) = &name {
+            if state.nodes.iter().any(|n| n.matches(name)) {
+                return Err(GmlError::from(format!("A node with name '{}' already exists", name)));
+            }
+        }
+
         let entry = NodeEntry {
             id: unique_id,
             provider_id: node_details.id.clone(),
@@ -110,6 +146,7 @@ impl GmlState {
             instance_type,
             timeout,
             user,
+            name,
         };
 
         // Check if node already exists (by provider_id to avoid duplicates from same provider)
@@ -125,8 +162,8 @@ impl GmlState {
     pub fn remove_node(node_id: &str) -> Result<(), GmlError> {
         let mut state = Self::load()?;
         let initial_len = state.nodes.len();
-        state.nodes.retain(|n| n.id != node_id);
-        
+        state.nodes.retain(|n| !n.matches(node_id));
+
         if state.nodes.len() == initial_len {
             return Err(GmlError::from(format!("Node with id '{}' not found", node_id)));
         }
@@ -134,10 +171,10 @@ impl GmlState {
         state.save()
     }
 
-    /// Get a node entry by ID
+    /// Get a node entry by ID or name
     pub fn get_node(node_id: &str) -> Result<Option<NodeEntry>, GmlError> {
         let state = Self::load()?;
-        Ok(state.nodes.into_iter().find(|n| n.id == node_id))
+        Ok(state.nodes.into_iter().find(|n| n.matches(node_id)))
     }
 
     /// List all nodes
@@ -152,7 +189,7 @@ impl GmlState {
         
         // Find the node and update its timeout
         let node = state.nodes.iter_mut()
-            .find(|n| n.id == node_id)
+            .find(|n| n.matches(node_id))
             .ok_or_else(|| GmlError::from(format!("Node with id '{}' not found", node_id)))?;
         
         node.timeout = timeout;
@@ -165,15 +202,24 @@ impl GmlState {
         provider: String,
         node_count: usize,
         timeout: Option<String>,
+        name: Option<String>,
     ) -> Result<(), GmlError> {
         let mut state = Self::load()?;
-        
+
+        // If a name is provided, ensure it's unique and doesn't collide with an id
+        if let Some(name) = &name {
+            if state.clusters.iter().any(|c| c.matches(name)) {
+                return Err(GmlError::from(format!("A cluster with name '{}' already exists", name)));
+            }
+        }
+
         let entry = ClusterEntry {
             id: cluster_id.clone(),
             provider,
             node_count,
             timeout,
             created_at: chrono::Utc::now().to_rfc3339(),
+            name,
         };
 
         // Check if cluster already exists
@@ -189,8 +235,8 @@ impl GmlState {
     pub fn remove_cluster(cluster_id: &str) -> Result<(), GmlError> {
         let mut state = Self::load()?;
         let initial_len = state.clusters.len();
-        state.clusters.retain(|c| c.id != cluster_id);
-        
+        state.clusters.retain(|c| !c.matches(cluster_id));
+
         if state.clusters.len() == initial_len {
             return Err(GmlError::from(format!("Cluster with id '{}' not found", cluster_id)));
         }
@@ -198,10 +244,10 @@ impl GmlState {
         state.save()
     }
 
-    /// Get a cluster entry by ID
+    /// Get a cluster entry by ID or name
     pub fn get_cluster(cluster_id: &str) -> Result<Option<ClusterEntry>, GmlError> {
         let state = Self::load()?;
-        Ok(state.clusters.into_iter().find(|c| c.id == cluster_id))
+        Ok(state.clusters.into_iter().find(|c| c.matches(cluster_id)))
     }
 
     /// List all clusters

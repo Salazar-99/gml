@@ -41,6 +41,14 @@ gml ls
 gml connect <node-id>
 ```
 
+- **Run a command on a node** (non-interactive over SSH; streams output and exits with the remote command's exit code):
+
+```bash
+gml run <node-id> "python train.py --epochs 10"   # run a job (command is a single quoted string)
+gml run <node-id> --sync "python train.py"          # rsync current folder first, then run
+gml run <node-id> --detach "python train.py"        # detached; logs to ~/gml-run.log
+```
+
 - **Delete a node**:
 
 ```bash
