@@ -976,6 +976,7 @@ dependencies = [
  "comfy-table",
  "dirs",
  "gml-core",
+ "gml-digitalocean",
  "gml-google",
  "gml-lambda",
  "humantime",
@@ -1007,6 +1008,19 @@ dependencies = [
  "chrono",
  "dirs",
  "gml-core",
+]
+
+[[package]]
+name = "gml-digitalocean"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "gml-core",
+ "reqwest 0.12.24",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

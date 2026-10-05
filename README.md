@@ -79,6 +79,21 @@ region = "..."
 
 The `ssh-key-name` field is the name of an SSH public key which you have already added to your Lambda account.
 
+### DigitalOcean provider
+
+The DigitalOcean provider currently supports **creating and deleting a node** (Droplet) and defaults to the **`ubuntu-22-04-x64`** image; override with the `GML_DIGITALOCEAN_IMAGE` env var if your size/region needs a different image.
+
+Add a `digitalocean` block to `~/.gml/config.toml`:
+
+```toml
+[digitalocean]
+api-key = "..."
+ssh-key-name = "..."
+region = "..."
+```
+
+The `ssh-key-name` field is the ID or fingerprint of an SSH key which you have already added to your DigitalOcean account (not the key's display name).
+
 ## gmld (the daemon)
 
 `gmld` is a small daemon that enforces timeouts by periodically reading `~/.gml/state.json` and deleting any expired resources (granularity: **1 minute**). Logs are written to `~/.gml/gmld.log`.

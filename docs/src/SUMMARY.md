@@ -9,4 +9,5 @@
 - [Providers](providers.md)
   - [Lambda](providers/lambda.md)
   - [Google](providers/google.md)
+  - [DigitalOcean](providers/digitalocean.md)
 - [Daemon (gmld)](daemon.md)

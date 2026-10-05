@@ -2,6 +2,7 @@ use gml_core::NodeProvider;
 use gml_core::error::GmlError;
 use gml_lambda::Lambda;
 use gml_google::Google;
+use gml_digitalocean::DigitalOcean;
 use crate::config::ProviderConfig;
 
 pub async fn create_provider_handle(
@@ -35,6 +36,22 @@ pub async fn create_provider_handle(
             )
             .await?;
             Ok(Box::new(google))
+        }
+        "digitalocean" => {
+            let api_key = provider_config.api_key
+                .as_ref()
+                .ok_or_else(|| GmlError::from("api-key is required for digitalocean provider, set it in your gml config"))?
+                .clone();
+            let ssh_key_id = provider_config.ssh_key
+                .as_ref()
+                .ok_or_else(|| GmlError::from("ssh-key is required for digitalocean provider, set it in your gml config"))?
+                .clone();
+            // Use CLI region if provided, otherwise fall back to config
+            let region = region_override
+                .or_else(|| provider_config.region.clone())
+                .ok_or_else(|| GmlError::from("region is required: provide --region flag or set it in your gml config"))?;
+
+            Ok(Box::new(DigitalOcean::new(api_key, ssh_key_id, region)))
         }
         _ => Err(GmlError::from(format!("Unimplemented provider: {}", provider_name)))
     }
